@@ -7,3 +7,5 @@ pinecone-client
 sentence-transformers
 ctransformers
 flask
+pyPDF
+-e .
