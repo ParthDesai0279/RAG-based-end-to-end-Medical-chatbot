@@ -8,4 +8,5 @@ sentence-transformers
 ctransformers
 flask
 pyPDF
+python-dotenv
 -e .
