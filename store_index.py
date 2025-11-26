@@ -1,49 +1,43 @@
-from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_pinecone import PineconeVectorStore
-
-from langchain_core.prompts import PromptTemplate
-from langchain_community.llms import CTransformers
-
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+# store_index.py
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 from pinecone import Pinecone, ServerlessSpec
-import os
+from src.helper import load_pdf, split_text, download_hugging_face_embeddings, build_pinecone_vectorstore
 
-# Pinecone Setup
-# -----------------------------
-os.environ["PINECONE_API_KEY"] = "pcsk_2SrqWF_TwCsRJJ8ALB37vTgan1GhMuXv2gmJPwW3mYDGDivkvGCcvAr7JfH9Xm369rWWgm"
-pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-index_name = "medical-chatbot"
+# config
+index_name = os.getenv("PINECONE_INDEX", "medical-chatbot")
+api_key = os.getenv("PINECONE_API_KEY")
+if not api_key:
+    raise RuntimeError("PINECONE_API_KEY missing in environment")
 
+# initialize pinecone client (minimal)
+pc = Pinecone(api_key=api_key)
+
+# create index if doesn't exist
 if index_name not in pc.list_indexes().names():
     pc.create_index(
         name=index_name,
-        dimension=384,
+        dimension=384,   # matches sentence-transformers/all-MiniLM-L6-v2
         metric="cosine",
         spec=ServerlessSpec(cloud="aws", region="us-east-1")
     )
 
+# load & chunk
+print("Loading PDFs...")
+documents = load_pdf("data/")    # folder with PDFs
+print(f"Loaded {len(documents)} documents")
 
-# Load PDF & Chunk
+print("Splitting into chunks...")
+chunks = split_text(documents, chunk_size=1000, chunk_overlap=200)
+print(f"Created {len(chunks)} chunks")
 
-def load_pdf(data_dir):
-    loader = DirectoryLoader(data_dir, glob="*.pdf", loader_cls=PyPDFLoader)
-    return loader.load()
+# embeddings
+print("Preparing embeddings...")
+embeddings = download_hugging_face_embeddings()
 
-extracted_data = load_pdf("data/")
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-text_chunks = text_splitter.split_documents(extracted_data)
-
-
-# Embeddings & Vector Store
-# -----------------------------
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-docsearch = PineconeVectorStore.from_texts(
-    [t.page_content for t in text_chunks],
-    embedding=embeddings,
-    index_name=index_name
-)
+# upsert to pinecone
+print("Building/upserting vectorstore...")
+vectorstore = build_pinecone_vectorstore(chunks, embeddings, index_name)
+print("Indexing complete.")

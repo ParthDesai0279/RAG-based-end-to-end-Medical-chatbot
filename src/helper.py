@@ -1,55 +1,58 @@
+# src/helper.py
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+
+# Use the new huggingface embeddings package
+from langchain_huggingface import HuggingFaceEmbeddings
+
+# Pinecone vectorstore import (used by store_index; app loads existing index)
 from langchain_pinecone import PineconeVectorStore
 
-from langchain_core.prompts import PromptTemplate
-from langchain_community.llms import CTransformers
-
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-
-from pinecone import Pinecone, ServerlessSpec
-import os
-
-
-pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-index_name = "medical-chatbot"
-
-if index_name not in pc.list_indexes().names():
-    pc.create_index(
-        name=index_name,
-        dimension=384,
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1")
-    )
-
-
-# Load PDF & Chunk
-
-def load_pdf(data_dir):
+def load_pdf(data_dir: str):
+    """
+    Returns list[Document] loaded from all PDFs in data_dir.
+    """
     loader = DirectoryLoader(data_dir, glob="*.pdf", loader_cls=PyPDFLoader)
     return loader.load()
 
-extracted_data = load_pdf("data/")
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-text_chunks = text_splitter.split_documents(extracted_data)
 
-# Embeddings & Vector Store
-# -----------------------------
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-docsearch = PineconeVectorStore.from_texts(
-    [t.page_content for t in text_chunks],
-    embedding=embeddings,
-    index_name=index_name
-)
+def split_text(documents, chunk_size: int = 1000, chunk_overlap: int = 200):
+    """
+    Splits documents into chunks (returns list[Document]).
+    """
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    return splitter.split_documents(documents)
 
 
-# LLM (CTransformers)
-# -----------------------------
-llm = CTransformers(
-    model="model/llama-2-7b-chat.ggmlv3.q4_0.bin",
-    model_type="llama",
-    config={'max_new_tokens': 512, 'temperature': 0.8}
-)
+def download_hugging_face_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    """
+    Returns an embeddings object (langchain_huggingface.HuggingFaceEmbeddings).
+    """
+    return HuggingFaceEmbeddings(model_name=model_name)
+
+
+def build_pinecone_vectorstore(text_chunks, embeddings, index_name: str):
+    """
+    Builds / upserts text_chunks into Pinecone index and returns PineconeVectorStore.
+    (text_chunks: iterable of Document objects)
+    """
+    # Create vectorstore from texts (upsert)
+    texts = [chunk.page_content for chunk in text_chunks]
+    # If you want metadata, pass list of dicts as 'metadatas' param
+    vectorstore = PineconeVectorStore.from_texts(
+        texts,
+        embedding=embeddings,
+        index_name=index_name
+    )
+    return vectorstore
+
+
+def get_vectorstore_for_existing_index(index_name: str, embeddings):
+    """
+    Return a PineconeVectorStore instance that points to an existing index.
+    """
+    return PineconeVectorStore(index_name=index_name, embedding=embeddings)
